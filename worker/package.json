@@ -1,0 +1,19 @@
+{
+  "name": "career-predictor-worker",
+  "version": "1.0.0",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "Cloudflare Worker for CareerPredictor - analyzes LinkedIn profiles and finds matching professionals",
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20251014.0",
+    "typescript": "^5.9.3",
+    "wrangler": "^4.45.3"
+  }
+}

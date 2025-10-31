@@ -1,0 +1,6 @@
+# Exa API Key
+# Get your API key from: https://dashboard.exa.ai/
+EXA_API_KEY=79f2d34a-de51-4a71-b65f-dd66092f2c68
+
+# Note: Cloudflare Workers AI binding is configured in wrangler.toml
+# You don't need to add a separate API key for Workers AI

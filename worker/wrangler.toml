@@ -1,0 +1,13 @@
+name = "career-predictor-worker"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+
+# Bind AI model
+[ai]
+binding = "AI"
+
+# Environment variables (add your actual keys in Cloudflare dashboard)
+# [vars]
+# EXA_API_KEY = "your-exa-api-key"
+
+# For local development, create a .dev.vars file with your keys

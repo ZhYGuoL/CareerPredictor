@@ -1,0 +1,29 @@
+CLAUDE.md
+.claude/
+
+
+# Dependencies
+node_modules/
+
+# Environment variables
+.env
+.env.local
+.dev.vars
+
+# Build outputs
+dist/
+.wrangler/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
