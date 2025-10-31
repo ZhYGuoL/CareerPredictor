@@ -175,25 +175,19 @@ async function findMatchingProfiles(
   careerGoal: string,
   apiKey: string
 ): Promise<MatchedProfile[]> {
-  // Build search query based on criteria and career goal
+  // Build search query - focus on career goal and alma mater only to avoid overly restrictive searches
   const queryParts: string[] = [careerGoal]
 
+  // Only add alma mater if available - skip previous companies and skills to keep search broad
   if (criteria.almaMater) {
-    queryParts.push(`attended ${criteria.almaMater}`)
-  }
-
-  if (criteria.previousCompanies && criteria.previousCompanies.length > 0) {
-    queryParts.push(`worked at ${criteria.previousCompanies.join(' or ')}`)
-  }
-
-  if (criteria.skills && criteria.skills.length > 0) {
-    queryParts.push(`skills: ${criteria.skills.slice(0, 3).join(', ')}`)
+    queryParts.push(`from ${criteria.almaMater}`)
   }
 
   const query = queryParts.join(' ')
   console.log('Webset search query:', query)
 
   // Step 1: Create webset with search
+  // Use fewer results and limit scope to make search faster and avoid timeouts
   const createResponse = await fetch('https://api.exa.ai/websets/v0/websets', {
     method: 'POST',
     headers: {
@@ -203,7 +197,11 @@ async function findMatchingProfiles(
     body: JSON.stringify({
       search: {
         query,
-        count: 10,
+        count: 5, // Reduced from 10 to 5 for faster results
+        entity: {
+          type: 'person', // Explicitly specify we're searching for people
+        },
+        recall: false, // Disable recall estimation to speed up search
       },
       enrichments: [
         {
@@ -226,10 +224,11 @@ async function findMatchingProfiles(
   // Step 2: Wait for webset to be idle (polling with timeout)
   let status = websetData.status
   let attempts = 0
-  const maxAttempts = 30 // 30 attempts * 2 seconds = 60 seconds max wait
+  const maxAttempts = 20 // 20 attempts * 3 seconds = 60 seconds max wait
+  let lastStatusData: any = null
 
   while (status !== 'idle' && attempts < maxAttempts) {
-    await new Promise(resolve => setTimeout(resolve, 2000)) // Wait 2 seconds
+    await new Promise(resolve => setTimeout(resolve, 3000)) // Wait 3 seconds between checks
 
     const statusResponse = await fetch(`https://api.exa.ai/websets/v0/websets/${websetId}`, {
       method: 'GET',
@@ -242,15 +241,30 @@ async function findMatchingProfiles(
       throw new Error(`Failed to check webset status: ${statusResponse.status}`)
     }
 
-    const statusData = await statusResponse.json() as { status: string }
-    status = statusData.status
+    lastStatusData = await statusResponse.json()
+    status = lastStatusData.status
     attempts++
-    console.log(`Webset status check ${attempts}:`, status)
+
+    // Log progress if available
+    const progress = lastStatusData.searches?.[0]?.progress
+    if (progress) {
+      console.log(`Webset status check ${attempts}: ${status} - Found: ${progress.found}, Analyzed: ${progress.analyzed}, Completion: ${progress.completion}%`)
+    } else {
+      console.log(`Webset status check ${attempts}:`, status)
+    }
+
+    // If we have some results and it's been too long, we can stop early
+    if (attempts >= 15 && progress && progress.found >= 3) {
+      console.log('Found sufficient results, stopping early')
+      break
+    }
   }
 
-  if (status !== 'idle') {
-    throw new Error('Webset processing timed out')
+  if (status !== 'idle' && (!lastStatusData?.searches?.[0]?.progress?.found || lastStatusData.searches[0].progress.found === 0)) {
+    throw new Error('Webset processing timed out without finding any results. Try a broader search query.')
   }
+
+  console.log('Webset processing completed or stopped. Status:', status)
 
   // Step 3: Get items from webset
   const itemsResponse = await fetch(`https://api.exa.ai/websets/v0/websets/${websetId}/items`, {
@@ -274,7 +288,8 @@ async function findMatchingProfiles(
   }
 
   // Map items to matched profiles
-  return itemsData.items.slice(0, 10).map(item => ({
+  console.log(`Retrieved ${itemsData.items.length} items from webset`)
+  return itemsData.items.slice(0, 5).map(item => ({
     url: item.url,
     title: item.title || 'LinkedIn Profile',
     snippet: item.enrichments?.[0]?.value || 'Professional profile',
