@@ -49,10 +49,13 @@ export default {
       // Step 1: Crawl LinkedIn profile using Exa
       console.log('Crawling LinkedIn profile...')
       const markdown = await crawlLinkedInProfile(linkedinUrl, env.EXA_API_KEY)
+      console.log('LinkedIn profile text length:', markdown.length)
+      console.log('LinkedIn profile preview:', markdown.substring(0, 500))
 
       // Step 2: Extract career criteria using Cloudflare Workers AI
       console.log('Extracting career criteria...')
       const criteria = await extractCriteria(markdown, env.AI)
+      console.log('Extracted criteria:', JSON.stringify(criteria))
 
       // Step 3: Create webset and find matching profiles
       console.log('Creating webset and finding matching profiles...')
@@ -103,30 +106,23 @@ async function crawlLinkedInProfile(url: string, apiKey: string): Promise<string
 }
 
 async function extractCriteria(markdown: string, ai: any): Promise<CareerCriteria> {
-  const prompt = `You are a career profile analyzer. Extract the following information from this LinkedIn profile in JSON format:
-- almaMater: The university or college they attended
-- year: Graduation year or current year in school
-- age: Approximate age (if mentioned or can be inferred)
-- previousCompanies: Array of companies they've worked at
-- skills: Array of key skills mentioned
+  const prompt = `Extract key information from this LinkedIn profile. Return ONLY a JSON object with these exact fields:
 
-Profile text:
+almaMater: The university name (e.g., "Stanford University", "MIT", "University of California Berkeley")
+year: Graduation year or current year (e.g., "2024", "Class of 2023")
+age: Approximate age if mentioned
+previousCompanies: List of company names they worked at (e.g., ["Google", "Microsoft"])
+skills: Top 5 technical or professional skills (e.g., ["Python", "Machine Learning", "Leadership"])
+
+LinkedIn Profile:
 ${markdown.substring(0, 4000)}
 
-Respond ONLY with valid JSON in this format:
-{
-  "almaMater": "string",
-  "year": "string",
-  "age": "string",
-  "previousCompanies": ["string"],
-  "skills": ["string"]
-}
-
-If any field is not found, use an empty string or empty array.`
+Return ONLY this JSON format, no other text:
+{"almaMater":"","year":"","age":"","previousCompanies":[],"skills":[]}`
 
   const response = await ai.run('@cf/meta/llama-3-8b-instruct', {
     messages: [
-      { role: 'system', content: 'You are a helpful assistant that extracts structured data from text. Always respond with valid JSON only.' },
+      { role: 'system', content: 'You extract structured data from LinkedIn profiles. Return only valid JSON, no explanations.' },
       { role: 'user', content: prompt }
     ],
   })
@@ -134,31 +130,43 @@ If any field is not found, use an empty string or empty array.`
   try {
     // Parse the AI response to extract JSON
     const responseText = response.response || JSON.stringify(response)
+    console.log('Raw AI response:', responseText.substring(0, 500))
 
     // Try to find JSON in the response
-    const jsonMatch = responseText.match(/\{[\s\S]*\}/)
+    const jsonMatch = responseText.match(/\{[\s\S]*?\}/)
     if (!jsonMatch) {
+      console.error('No JSON found in AI response. Full response:', responseText)
       throw new Error('No JSON found in AI response')
     }
 
     const criteria = JSON.parse(jsonMatch[0]) as CareerCriteria
+    console.log('Parsed criteria before cleaning:', JSON.stringify(criteria))
 
-    // Clean up empty values
+    // Clean up empty values - but keep meaningful data
     const cleanedCriteria: CareerCriteria = {}
     for (const [key, value] of Object.entries(criteria)) {
-      if (value && (typeof value === 'string' ? value.trim() : value.length > 0)) {
-        cleanedCriteria[key] = value
+      if (value !== null && value !== undefined && value !== '') {
+        if (typeof value === 'string' && value.trim().length > 0) {
+          cleanedCriteria[key] = value.trim()
+        } else if (Array.isArray(value) && value.length > 0) {
+          cleanedCriteria[key] = value
+        }
       }
+    }
+
+    console.log('Cleaned criteria:', JSON.stringify(cleanedCriteria))
+
+    // If we got nothing, throw an error instead of returning Unknown
+    if (Object.keys(cleanedCriteria).length === 0) {
+      throw new Error('No valid criteria extracted from profile')
     }
 
     return cleanedCriteria
   } catch (error) {
     console.error('Error parsing AI response:', error)
-    // Return a basic structure if parsing fails
-    return {
-      almaMater: 'Unknown',
-      skills: []
-    }
+    console.error('Full AI response:', JSON.stringify(response))
+    // Throw the error instead of silently returning Unknown
+    throw new Error(`Failed to extract criteria from LinkedIn profile: ${error instanceof Error ? error.message : 'Unknown error'}`)
   }
 }
 
