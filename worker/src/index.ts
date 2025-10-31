@@ -54,8 +54,8 @@ export default {
       console.log('Extracting career criteria...')
       const criteria = await extractCriteria(markdown, env.AI)
 
-      // Step 3: Query Exa webset for matching profiles
-      console.log('Finding matching profiles...')
+      // Step 3: Create webset and find matching profiles
+      console.log('Creating webset and finding matching profiles...')
       const matchedProfiles = await findMatchingProfiles(criteria, careerGoal, env.EXA_API_KEY)
 
       return new Response(
@@ -183,41 +183,92 @@ async function findMatchingProfiles(
   }
 
   const query = queryParts.join(' ')
+  console.log('Webset search query:', query)
 
-  const response = await fetch('https://api.exa.ai/search', {
+  // Step 1: Create webset with search
+  const createResponse = await fetch('https://api.exa.ai/websets/', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'x-api-key': apiKey,
     },
     body: JSON.stringify({
-      query,
-      numResults: 10,
-      type: 'neural',
-      contents: {
-        text: {
-          maxCharacters: 200,
-        },
+      search: {
+        query,
+        count: 10,
       },
+      enrichments: [
+        {
+          description: 'Extract the person\'s current role and company',
+          format: 'text',
+        },
+      ],
     }),
   })
 
-  if (!response.ok) {
-    const errorText = await response.text()
-    throw new Error(`Exa search API error: ${response.status} - ${errorText}`)
+  if (!createResponse.ok) {
+    const errorText = await createResponse.text()
+    throw new Error(`Exa webset creation error: ${createResponse.status} - ${errorText}`)
   }
 
-  const data = await response.json() as {
-    results: Array<{
+  const websetData = await createResponse.json() as { id: string; status: string }
+  const websetId = websetData.id
+  console.log('Created webset:', websetId, 'Status:', websetData.status)
+
+  // Step 2: Wait for webset to be idle (polling with timeout)
+  let status = websetData.status
+  let attempts = 0
+  const maxAttempts = 30 // 30 attempts * 2 seconds = 60 seconds max wait
+
+  while (status !== 'idle' && attempts < maxAttempts) {
+    await new Promise(resolve => setTimeout(resolve, 2000)) // Wait 2 seconds
+
+    const statusResponse = await fetch(`https://api.exa.ai/websets/${websetId}`, {
+      method: 'GET',
+      headers: {
+        'x-api-key': apiKey,
+      },
+    })
+
+    if (!statusResponse.ok) {
+      throw new Error(`Failed to check webset status: ${statusResponse.status}`)
+    }
+
+    const statusData = await statusResponse.json() as { status: string }
+    status = statusData.status
+    attempts++
+    console.log(`Webset status check ${attempts}:`, status)
+  }
+
+  if (status !== 'idle') {
+    throw new Error('Webset processing timed out')
+  }
+
+  // Step 3: Get items from webset
+  const itemsResponse = await fetch(`https://api.exa.ai/websets/${websetId}/items`, {
+    method: 'GET',
+    headers: {
+      'x-api-key': apiKey,
+    },
+  })
+
+  if (!itemsResponse.ok) {
+    const errorText = await itemsResponse.text()
+    throw new Error(`Failed to get webset items: ${itemsResponse.status} - ${errorText}`)
+  }
+
+  const itemsData = await itemsResponse.json() as {
+    items: Array<{
       url: string
-      title: string
-      text?: string
+      title?: string
+      enrichments?: Array<{ value?: string }>
     }>
   }
 
-  return data.results.map(result => ({
-    url: result.url,
-    title: result.title,
-    snippet: result.text || 'No description available',
+  // Map items to matched profiles
+  return itemsData.items.slice(0, 10).map(item => ({
+    url: item.url,
+    title: item.title || 'LinkedIn Profile',
+    snippet: item.enrichments?.[0]?.value || 'Professional profile',
   }))
 }
