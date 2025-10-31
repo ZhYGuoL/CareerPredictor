@@ -3,13 +3,13 @@ interface Env {
   EXA_API_KEY: string
 }
 
+interface PointOfInterest {
+  description: string
+  type: 'education' | 'experience' | 'skill' | 'achievement' | 'background'
+}
+
 interface CareerCriteria {
-  almaMater?: string
-  year?: string
-  age?: string
-  previousCompanies?: string[]
-  skills?: string[]
-  [key: string]: string | string[] | undefined
+  pointsOfInterest: PointOfInterest[]
 }
 
 interface MatchedProfile {
@@ -106,23 +106,28 @@ async function crawlLinkedInProfile(url: string, apiKey: string): Promise<string
 }
 
 async function extractCriteria(markdown: string, ai: any): Promise<CareerCriteria> {
-  const prompt = `Extract key information from this LinkedIn profile. Return ONLY a JSON object with these exact fields:
+  const prompt = `Analyze this LinkedIn profile and identify 3-5 key "points of interest" that define this person's unique background and qualifications.
 
-almaMater: The university name (e.g., "Stanford University", "MIT", "University of California Berkeley")
-year: Graduation year or current year (e.g., "2024", "Class of 2023")
-age: Approximate age if mentioned
-previousCompanies: List of company names they worked at (e.g., ["Google", "Microsoft"])
-skills: Top 5 technical or professional skills (e.g., ["Python", "Machine Learning", "Leadership"])
+Each point of interest should be:
+- Specific and measurable (e.g., "Studied Computer Science at Stanford" not just "went to college")
+- Career-relevant (education, work experience, skills, achievements)
+- Generalizable (can be matched with similar people)
 
 LinkedIn Profile:
 ${markdown.substring(0, 4000)}
 
-Return ONLY this JSON format, no other text:
-{"almaMater":"","year":"","age":"","previousCompanies":[],"skills":[]}`
+Return ONLY a JSON array of points of interest in this exact format:
+[
+  {"description": "Studied at Carnegie Mellon University", "type": "education"},
+  {"description": "Has internship experience at tech companies", "type": "experience"},
+  {"description": "Proficient in Python and Machine Learning", "type": "skill"}
+]
+
+Types: education, experience, skill, achievement, background`
 
   const response = await ai.run('@cf/meta/llama-3-8b-instruct', {
     messages: [
-      { role: 'system', content: 'You extract structured data from LinkedIn profiles. Return only valid JSON, no explanations.' },
+      { role: 'system', content: 'You analyze LinkedIn profiles and extract key points of interest. Return only valid JSON arrays, no explanations.' },
       { role: 'user', content: prompt }
     ],
   })
@@ -132,41 +137,34 @@ Return ONLY this JSON format, no other text:
     const responseText = response.response || JSON.stringify(response)
     console.log('Raw AI response:', responseText.substring(0, 500))
 
-    // Try to find JSON in the response
-    const jsonMatch = responseText.match(/\{[\s\S]*?\}/)
+    // Try to find JSON array in the response
+    const jsonMatch = responseText.match(/\[[\s\S]*?\]/)
     if (!jsonMatch) {
-      console.error('No JSON found in AI response. Full response:', responseText)
-      throw new Error('No JSON found in AI response')
+      console.error('No JSON array found in AI response. Full response:', responseText)
+      throw new Error('No JSON array found in AI response')
     }
 
-    const criteria = JSON.parse(jsonMatch[0]) as CareerCriteria
-    console.log('Parsed criteria before cleaning:', JSON.stringify(criteria))
+    const pointsOfInterest = JSON.parse(jsonMatch[0]) as PointOfInterest[]
+    console.log('Parsed points of interest:', JSON.stringify(pointsOfInterest))
 
-    // Clean up empty values - but keep meaningful data
-    const cleanedCriteria: CareerCriteria = {}
-    for (const [key, value] of Object.entries(criteria)) {
-      if (value !== null && value !== undefined && value !== '') {
-        if (typeof value === 'string' && value.trim().length > 0) {
-          cleanedCriteria[key] = value.trim()
-        } else if (Array.isArray(value) && value.length > 0) {
-          cleanedCriteria[key] = value
-        }
-      }
+    // Validate and clean
+    const validPoints = pointsOfInterest.filter(point =>
+      point.description &&
+      point.description.trim().length > 0 &&
+      point.type
+    )
+
+    if (validPoints.length === 0) {
+      throw new Error('No valid points of interest extracted from profile')
     }
 
-    console.log('Cleaned criteria:', JSON.stringify(cleanedCriteria))
+    console.log('Valid points of interest:', JSON.stringify(validPoints))
 
-    // If we got nothing, throw an error instead of returning Unknown
-    if (Object.keys(cleanedCriteria).length === 0) {
-      throw new Error('No valid criteria extracted from profile')
-    }
-
-    return cleanedCriteria
+    return { pointsOfInterest: validPoints.slice(0, 5) } // Max 5 criteria per Exa API limit
   } catch (error) {
     console.error('Error parsing AI response:', error)
     console.error('Full AI response:', JSON.stringify(response))
-    // Throw the error instead of silently returning Unknown
-    throw new Error(`Failed to extract criteria from LinkedIn profile: ${error instanceof Error ? error.message : 'Unknown error'}`)
+    throw new Error(`Failed to extract points of interest from LinkedIn profile: ${error instanceof Error ? error.message : 'Unknown error'}`)
   }
 }
 
@@ -175,19 +173,18 @@ async function findMatchingProfiles(
   careerGoal: string,
   apiKey: string
 ): Promise<MatchedProfile[]> {
-  // Build search query - focus on career goal and alma mater only to avoid overly restrictive searches
-  const queryParts: string[] = [careerGoal]
-
-  // Only add alma mater if available - skip previous companies and skills to keep search broad
-  if (criteria.almaMater) {
-    queryParts.push(`from ${criteria.almaMater}`)
-  }
-
-  const query = queryParts.join(' ')
+  // Use career goal as the main query
+  const query = careerGoal
   console.log('Webset search query:', query)
 
-  // Step 1: Create webset with search
-  // Use fewer results and limit scope to make search faster and avoid timeouts
+  // Convert points of interest into Exa criteria
+  const exaCriteria = criteria.pointsOfInterest.map(point => ({
+    description: point.description
+  }))
+
+  console.log('Webset criteria:', JSON.stringify(exaCriteria))
+
+  // Step 1: Create webset with search and criteria
   const createResponse = await fetch('https://api.exa.ai/websets/v0/websets', {
     method: 'POST',
     headers: {
@@ -196,12 +193,13 @@ async function findMatchingProfiles(
     },
     body: JSON.stringify({
       search: {
-        query,
-        count: 5, // Reduced from 10 to 5 for faster results
+        query, // Career goal is the main search query
+        count: 5,
         entity: {
-          type: 'person', // Explicitly specify we're searching for people
+          type: 'person',
         },
-        recall: false, // Disable recall estimation to speed up search
+        criteria: exaCriteria, // Points of interest as matching criteria
+        recall: false,
       },
       enrichments: [
         {
