@@ -186,7 +186,7 @@ async function findMatchingProfiles(
   console.log('Webset search query:', query)
 
   // Step 1: Create webset with search
-  const createResponse = await fetch('https://api.exa.ai/websets/', {
+  const createResponse = await fetch('https://api.exa.ai/websets/v0/websets', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -223,7 +223,7 @@ async function findMatchingProfiles(
   while (status !== 'idle' && attempts < maxAttempts) {
     await new Promise(resolve => setTimeout(resolve, 2000)) // Wait 2 seconds
 
-    const statusResponse = await fetch(`https://api.exa.ai/websets/${websetId}`, {
+    const statusResponse = await fetch(`https://api.exa.ai/websets/v0/websets/${websetId}`, {
       method: 'GET',
       headers: {
         'x-api-key': apiKey,
@@ -245,7 +245,7 @@ async function findMatchingProfiles(
   }
 
   // Step 3: Get items from webset
-  const itemsResponse = await fetch(`https://api.exa.ai/websets/${websetId}/items`, {
+  const itemsResponse = await fetch(`https://api.exa.ai/websets/v0/websets/${websetId}/items`, {
     method: 'GET',
     headers: {
       'x-api-key': apiKey,
