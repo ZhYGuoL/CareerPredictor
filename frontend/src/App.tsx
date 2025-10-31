@@ -58,7 +58,8 @@ function App() {
 
     try {
       // Call Cloudflare Worker API endpoint
-      const response = await fetch('/api/analyze', {
+      const apiUrl = import.meta.env.VITE_API_URL || '/api/analyze'
+      const response = await fetch(apiUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
