@@ -173,14 +173,17 @@ async function findMatchingProfiles(
   careerGoal: string,
   apiKey: string
 ): Promise<MatchedProfile[]> {
-  // Use career goal as the main query
-  const query = careerGoal
+  // Use a generic query for people/professionals
+  const query = 'professional LinkedIn profiles'
   console.log('Webset search query:', query)
 
-  // Convert points of interest into Exa criteria
-  const exaCriteria = criteria.pointsOfInterest.map(point => ({
-    description: point.description
-  }))
+  // Convert points of interest into Exa criteria, and add career goal as first criterion
+  const exaCriteria = [
+    { description: careerGoal }, // Career goal as the primary criterion
+    ...criteria.pointsOfInterest.slice(0, 4).map(point => ({ // Limit to 4 more (max 5 total)
+      description: point.description
+    }))
+  ]
 
   console.log('Webset criteria:', JSON.stringify(exaCriteria))
 
@@ -193,12 +196,12 @@ async function findMatchingProfiles(
     },
     body: JSON.stringify({
       search: {
-        query, // Career goal is the main search query
+        query, // Generic query for professionals
         count: 5,
         entity: {
           type: 'person',
         },
-        criteria: exaCriteria, // Points of interest as matching criteria
+        criteria: exaCriteria, // Career goal + points of interest as matching criteria
         recall: false,
       },
       enrichments: [
