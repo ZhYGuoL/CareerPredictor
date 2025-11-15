@@ -1,12 +1,12 @@
 # CareerPredictor
 
-A web application that analyzes LinkedIn profiles and finds similar professionals who have achieved specific career goals. The app uses Exa's web crawler and search API along with Cloudflare Workers AI to extract career criteria and match profiles.
+A web application that analyzes LinkedIn profiles and finds similar professionals who have achieved specific career goals. The app uses Exa's web crawler to scrape profiles, Clado's AI-powered search to find matching professionals, and Cloudflare Workers AI to extract career criteria.
 
 ## Architecture
 
 - **Frontend**: React + Vite + TypeScript
 - **Backend**: Cloudflare Worker
-- **APIs**: Exa (crawler & search), Cloudflare Workers AI
+- **APIs**: Exa (profile scraping), Clado (people search), Cloudflare Workers AI
 
 ## Project Structure
 
@@ -32,7 +32,8 @@ CareerPredictor/
 - Node.js 18+
 - npm or yarn
 - Cloudflare account (for deployment)
-- Exa API key from https://dashboard.exa.ai/
+- Exa API key from https://dashboard.exa.ai/ (for profile scraping)
+- Clado API key from https://docs.clado.ai/ (for people search)
 
 ### Frontend Setup
 
@@ -48,7 +49,7 @@ cp .env.example .env  # Configure if needed
 cd worker
 npm install
 cp .dev.vars.example .dev.vars
-# Edit .dev.vars and add your EXA_API_KEY
+# Edit .dev.vars and add your EXA_API_KEY and CLADO_API_KEY
 ```
 
 ## Development
@@ -91,9 +92,14 @@ cd worker
 npm run deploy
 ```
 
-4. Set the environment variable in Cloudflare dashboard:
+4. Set the environment variables in Cloudflare dashboard or via CLI:
+   ```bash
+   wrangler secret put EXA_API_KEY
+   wrangler secret put CLADO_API_KEY
+   ```
+   Or manually in Cloudflare dashboard:
    - Go to Workers & Pages > your-worker > Settings > Variables
-   - Add `EXA_API_KEY` with your API key
+   - Add `EXA_API_KEY` and `CLADO_API_KEY` as encrypted secrets
 
 ### Deploy the Frontend
 
@@ -122,8 +128,8 @@ Alternatively, deploy to any static hosting service (Vercel, Netlify, etc.)
 3. The worker:
    - Calls Exa's crawler API to get the LinkedIn profile as markdown
    - Uses Cloudflare Workers AI to extract career criteria (alma mater, companies, skills, etc.)
-   - Queries Exa's search API to find similar professionals matching those criteria
-4. Results are displayed to the user
+   - Queries Clado's AI-powered search API to find similar professionals matching those criteria
+4. Results are displayed to the user with rich profile information
 
 ## Privacy
 
@@ -131,8 +137,11 @@ All data is processed in-memory and never stored or persisted. No user data is s
 
 ## API Keys
 
-- **Exa API Key**: Required for crawling LinkedIn profiles and searching for matches
+- **Exa API Key**: Required for crawling/scraping LinkedIn profiles
   - Get it from: https://dashboard.exa.ai/
+- **Clado API Key**: Required for searching and finding matching professionals
+  - Get it from: https://docs.clado.ai/
+  - Use natural language queries to find LinkedIn profiles
 - **Cloudflare Workers AI**: Automatically available when deployed to Cloudflare Workers
   - No separate API key needed, uses Workers AI binding
 

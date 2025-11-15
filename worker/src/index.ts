@@ -47,27 +47,34 @@ export default {
         )
       }
 
+      console.log('=== Starting Career Predictor Request ===')
+      console.log('LinkedIn URL:', linkedinUrl)
+      console.log('Career Goal:', careerGoal)
+
       // Step 1: Crawl LinkedIn profile using Exa
-      console.log('Crawling LinkedIn profile...')
+      console.log('\n[STEP 1/3] Crawling LinkedIn profile with Exa...')
       const markdown = await crawlLinkedInProfile(linkedinUrl, env.EXA_API_KEY)
-      console.log('LinkedIn profile text length:', markdown.length)
-      console.log('LinkedIn profile preview:', markdown.substring(0, 500))
+      console.log('✅ Profile crawled successfully. Length:', markdown.length, 'characters')
+      console.log('Preview:', markdown.substring(0, 300) + '...')
 
       // Step 2: Extract career criteria using Cloudflare Workers AI
-      console.log('Extracting career criteria...')
+      console.log('\n[STEP 2/3] Extracting career criteria with Workers AI...')
       const criteria = await extractCriteria(markdown, env.AI)
-      console.log('Extracted criteria:', JSON.stringify(criteria))
+      console.log('✅ Criteria extracted successfully:', JSON.stringify(criteria, null, 2))
 
       // Step 3: Find matching profiles using Clado
-      console.log('Finding matching profiles with Clado...')
+      console.log('\n[STEP 3/3] Finding matching profiles with Clado...')
       const matchedProfiles = await findMatchingProfiles(criteria, careerGoal, env.CLADO_API_KEY)
+      console.log('✅ Found', matchedProfiles.length, 'matching profiles')
 
+      console.log('\n=== Request completed successfully ===\n')
       return new Response(
         JSON.stringify({ criteria, matchedProfiles }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     } catch (error) {
-      console.error('Error processing request:', error)
+      console.error('\n❌ ERROR:', error)
+      console.error('Error details:', error instanceof Error ? error.stack : error)
       return new Response(
         JSON.stringify({ error: error instanceof Error ? error.message : 'Internal server error' }),
         { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -180,7 +187,7 @@ async function findMatchingProfiles(
     .join(', ')
   
   const query = `${careerGoal}. Looking for professionals with: ${pointsDescription}`
-  console.log('Clado search query:', query)
+  console.log('   Building Clado query:', query)
 
   // Call Clado Search API
   const url = new URL('https://search.clado.ai/api/search')
@@ -189,60 +196,73 @@ async function findMatchingProfiles(
   url.searchParams.append('advanced_filtering', 'true')
   url.searchParams.append('legacy', 'false') // Use new format
 
-  const response = await fetch(url.toString(), {
-    method: 'GET',
-    headers: {
-      'Authorization': `Bearer ${apiKey}`,
-    },
-  })
+  console.log('   Calling Clado API...')
+  console.log('   URL:', url.toString())
 
-  if (!response.ok) {
-    const errorText = await response.text()
-    throw new Error(`Clado API error: ${response.status} - ${errorText}`)
-  }
+  try {
+    const response = await fetch(url.toString(), {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+    })
 
-  const data = await response.json() as {
-    results: Array<{
-      profile: {
-        name: string
-        headline?: string
-        linkedin_url: string
-        description?: string
-        location?: string
-      }
-      experience?: Array<{
-        title: string
-        company_name: string
-        description?: string
+    console.log('   Clado response status:', response.status)
+
+    if (!response.ok) {
+      const errorText = await response.text()
+      console.error('   Clado API error response:', errorText)
+      throw new Error(`Clado API error: ${response.status} - ${errorText}`)
+    }
+
+    const data = await response.json() as {
+      results: Array<{
+        profile: {
+          name: string
+          headline?: string
+          linkedin_url: string
+          description?: string
+          location?: string
+        }
+        experience?: Array<{
+          title: string
+          company_name: string
+          description?: string
+        }>
       }>
-    }>
-    total: number
-    search_id: string
+      total: number
+      search_id: string
+    }
+
+    console.log(`   Clado found ${data.total} total results`)
+    console.log(`   Returning ${Math.min(data.results.length, 5)} profiles`)
+
+    // Map Clado results to MatchedProfile format
+    return data.results.slice(0, 5).map(result => {
+      const profile = result.profile
+      const currentRole = result.experience?.[0]
+      
+      // Build a snippet from available information
+      let snippet = profile.headline || ''
+      if (currentRole) {
+        snippet = `${currentRole.title} at ${currentRole.company_name}`
+      }
+      if (profile.location) {
+        snippet += ` • ${profile.location}`
+      }
+      if (profile.description) {
+        snippet += ` • ${profile.description.substring(0, 150)}...`
+      }
+
+      return {
+        url: profile.linkedin_url,
+        title: profile.name,
+        snippet: snippet || 'LinkedIn Professional',
+      }
+    })
+  } catch (error) {
+    console.error('   Clado API call failed:', error)
+    throw error
   }
-
-  console.log(`Clado found ${data.total} total results, returning ${data.results.length} profiles`)
-
-  // Map Clado results to MatchedProfile format
-  return data.results.slice(0, 5).map(result => {
-    const profile = result.profile
-    const currentRole = result.experience?.[0]
-    
-    // Build a snippet from available information
-    let snippet = profile.headline || ''
-    if (currentRole) {
-      snippet = `${currentRole.title} at ${currentRole.company_name}`
-    }
-    if (profile.location) {
-      snippet += ` • ${profile.location}`
-    }
-    if (profile.description) {
-      snippet += ` • ${profile.description.substring(0, 150)}...`
-    }
-
-    return {
-      url: profile.linkedin_url,
-      title: profile.name,
-      snippet: snippet || 'LinkedIn Professional',
-    }
-  })
 }
