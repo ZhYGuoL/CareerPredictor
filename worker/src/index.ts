@@ -1,6 +1,7 @@
 interface Env {
   AI: any
   EXA_API_KEY: string
+  CLADO_API_KEY: string
 }
 
 interface PointOfInterest {
@@ -57,9 +58,9 @@ export default {
       const criteria = await extractCriteria(markdown, env.AI)
       console.log('Extracted criteria:', JSON.stringify(criteria))
 
-      // Step 3: Create webset and find matching profiles
-      console.log('Creating webset and finding matching profiles...')
-      const matchedProfiles = await findMatchingProfiles(criteria, careerGoal, env.EXA_API_KEY)
+      // Step 3: Find matching profiles using Clado
+      console.log('Finding matching profiles with Clado...')
+      const matchedProfiles = await findMatchingProfiles(criteria, careerGoal, env.CLADO_API_KEY)
 
       return new Response(
         JSON.stringify({ criteria, matchedProfiles }),
@@ -173,126 +174,75 @@ async function findMatchingProfiles(
   careerGoal: string,
   apiKey: string
 ): Promise<MatchedProfile[]> {
-  // Use a generic query for people/professionals
-  const query = 'professional LinkedIn profiles'
-  console.log('Webset search query:', query)
+  // Build a natural language query from career goal and points of interest
+  const pointsDescription = criteria.pointsOfInterest
+    .map(point => point.description)
+    .join(', ')
+  
+  const query = `${careerGoal}. Looking for professionals with: ${pointsDescription}`
+  console.log('Clado search query:', query)
 
-  // Convert points of interest into Exa criteria, and add career goal as first criterion
-  const exaCriteria = [
-    { description: careerGoal }, // Career goal as the primary criterion
-    ...criteria.pointsOfInterest.slice(0, 4).map(point => ({ // Limit to 4 more (max 5 total)
-      description: point.description
-    }))
-  ]
+  // Call Clado Search API
+  const url = new URL('https://search.clado.ai/api/search')
+  url.searchParams.append('query', query)
+  url.searchParams.append('limit', '10')
+  url.searchParams.append('advanced_filtering', 'true')
+  url.searchParams.append('legacy', 'false') // Use new format
 
-  console.log('Webset criteria:', JSON.stringify(exaCriteria))
-
-  // Step 1: Create webset with search and criteria
-  const createResponse = await fetch('https://api.exa.ai/websets/v0/websets', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-    },
-    body: JSON.stringify({
-      search: {
-        query, // Generic query for professionals
-        count: 5,
-        entity: {
-          type: 'person',
-        },
-        criteria: exaCriteria, // Career goal + points of interest as matching criteria
-        recall: false,
-      },
-      enrichments: [
-        {
-          description: 'Extract the person\'s current role and company',
-          format: 'text',
-        },
-      ],
-    }),
-  })
-
-  if (!createResponse.ok) {
-    const errorText = await createResponse.text()
-    throw new Error(`Exa webset creation error: ${createResponse.status} - ${errorText}`)
-  }
-
-  const websetData = await createResponse.json() as { id: string; status: string }
-  const websetId = websetData.id
-  console.log('Created webset:', websetId, 'Status:', websetData.status)
-
-  // Step 2: Wait for webset to be idle (polling with timeout)
-  let status = websetData.status
-  let attempts = 0
-  const maxAttempts = 20 // 20 attempts * 3 seconds = 60 seconds max wait
-  let lastStatusData: any = null
-
-  while (status !== 'idle' && attempts < maxAttempts) {
-    await new Promise(resolve => setTimeout(resolve, 3000)) // Wait 3 seconds between checks
-
-    const statusResponse = await fetch(`https://api.exa.ai/websets/v0/websets/${websetId}`, {
-      method: 'GET',
-      headers: {
-        'x-api-key': apiKey,
-      },
-    })
-
-    if (!statusResponse.ok) {
-      throw new Error(`Failed to check webset status: ${statusResponse.status}`)
-    }
-
-    lastStatusData = await statusResponse.json()
-    status = lastStatusData.status
-    attempts++
-
-    // Log progress if available
-    const progress = lastStatusData.searches?.[0]?.progress
-    if (progress) {
-      console.log(`Webset status check ${attempts}: ${status} - Found: ${progress.found}, Analyzed: ${progress.analyzed}, Completion: ${progress.completion}%`)
-    } else {
-      console.log(`Webset status check ${attempts}:`, status)
-    }
-
-    // If we have some results and it's been too long, we can stop early
-    if (attempts >= 15 && progress && progress.found >= 3) {
-      console.log('Found sufficient results, stopping early')
-      break
-    }
-  }
-
-  if (status !== 'idle' && (!lastStatusData?.searches?.[0]?.progress?.found || lastStatusData.searches[0].progress.found === 0)) {
-    throw new Error('Webset processing timed out without finding any results. Try a broader search query.')
-  }
-
-  console.log('Webset processing completed or stopped. Status:', status)
-
-  // Step 3: Get items from webset
-  const itemsResponse = await fetch(`https://api.exa.ai/websets/v0/websets/${websetId}/items`, {
+  const response = await fetch(url.toString(), {
     method: 'GET',
     headers: {
-      'x-api-key': apiKey,
+      'Authorization': `Bearer ${apiKey}`,
     },
   })
 
-  if (!itemsResponse.ok) {
-    const errorText = await itemsResponse.text()
-    throw new Error(`Failed to get webset items: ${itemsResponse.status} - ${errorText}`)
+  if (!response.ok) {
+    const errorText = await response.text()
+    throw new Error(`Clado API error: ${response.status} - ${errorText}`)
   }
 
-  const itemsData = await itemsResponse.json() as {
-    items: Array<{
-      url: string
-      title?: string
-      enrichments?: Array<{ value?: string }>
+  const data = await response.json() as {
+    results: Array<{
+      profile: {
+        name: string
+        headline?: string
+        linkedin_url: string
+        description?: string
+        location?: string
+      }
+      experience?: Array<{
+        title: string
+        company_name: string
+        description?: string
+      }>
     }>
+    total: number
+    search_id: string
   }
 
-  // Map items to matched profiles
-  console.log(`Retrieved ${itemsData.items.length} items from webset`)
-  return itemsData.items.slice(0, 5).map(item => ({
-    url: item.url,
-    title: item.title || 'LinkedIn Profile',
-    snippet: item.enrichments?.[0]?.value || 'Professional profile',
-  }))
+  console.log(`Clado found ${data.total} total results, returning ${data.results.length} profiles`)
+
+  // Map Clado results to MatchedProfile format
+  return data.results.slice(0, 5).map(result => {
+    const profile = result.profile
+    const currentRole = result.experience?.[0]
+    
+    // Build a snippet from available information
+    let snippet = profile.headline || ''
+    if (currentRole) {
+      snippet = `${currentRole.title} at ${currentRole.company_name}`
+    }
+    if (profile.location) {
+      snippet += ` • ${profile.location}`
+    }
+    if (profile.description) {
+      snippet += ` • ${profile.description.substring(0, 150)}...`
+    }
+
+    return {
+      url: profile.linkedin_url,
+      title: profile.name,
+      snippet: snippet || 'LinkedIn Professional',
+    }
+  })
 }

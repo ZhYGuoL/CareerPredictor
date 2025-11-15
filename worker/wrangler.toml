@@ -7,5 +7,5 @@ compatibility_date = "2024-01-01"
 binding = "AI"
 
 # For local development, create a .dev.vars file with your keys
-# EXA_API_KEY is stored as a secret (use wrangler secret put EXA_API_KEY)
-# Websets are created dynamically for each user request
+# EXA_API_KEY is stored as a secret (use wrangler secret put EXA_API_KEY) - used for scraping LinkedIn profiles
+# CLADO_API_KEY is stored as a secret (use wrangler secret put CLADO_API_KEY) - used for searching people
