@@ -1,13 +1,13 @@
 import { useState } from 'react'
 import './App.css'
 
+interface PointOfInterest {
+  description: string
+  type: 'education' | 'experience' | 'skill' | 'achievement' | 'background'
+}
+
 interface CareerCriteria {
-  almaMater?: string
-  year?: string
-  age?: string
-  previousCompanies?: string[]
-  skills?: string[]
-  [key: string]: string | string[] | undefined
+  pointsOfInterest: PointOfInterest[]
 }
 
 interface MatchedProfile {
@@ -146,12 +146,12 @@ function App() {
 
       {criteria && !loading && (
         <div className="results-section">
-          <h2>Extracted Career Criteria</h2>
+          <h2>Career Profile Analysis</h2>
           <div className="criteria-card">
-            {Object.entries(criteria).map(([key, value]) => (
-              <div key={key} className="criteria-item">
-                <strong>{key.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase())}:</strong>{' '}
-                {Array.isArray(value) ? value.join(', ') : value}
+            {criteria.pointsOfInterest.map((point, index) => (
+              <div key={index} className="criteria-item">
+                <strong>{point.type}</strong>
+                {point.description}
               </div>
             ))}
           </div>
