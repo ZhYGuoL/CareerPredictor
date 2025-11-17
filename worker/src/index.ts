@@ -200,6 +200,13 @@ async function findMatchingProfiles(
   console.log('   URL:', url.toString())
 
   try {
+    // Validate API key format
+    if (!apiKey || apiKey.trim() === '') {
+      throw new Error('Clado API key is missing')
+    }
+    
+    console.log('   API key format:', apiKey.substring(0, 5) + '...')
+    
     const response = await fetch(url.toString(), {
       method: 'GET',
       headers: {
@@ -209,11 +216,19 @@ async function findMatchingProfiles(
     })
 
     console.log('   Clado response status:', response.status)
+    console.log('   Clado response headers:', Object.fromEntries(response.headers.entries()))
 
     if (!response.ok) {
       const errorText = await response.text()
       console.error('   Clado API error response:', errorText)
-      throw new Error(`Clado API error: ${response.status} - ${errorText}`)
+      
+      if (response.status === 401) {
+        throw new Error('Clado API authentication failed. Please check your API key. Keys should start with "lk_"')
+      } else if (response.status === 429) {
+        throw new Error('Clado API rate limit exceeded. Please try again later')
+      } else {
+        throw new Error(`Clado API error (${response.status}): ${errorText}`)
+      }
     }
 
     const data = await response.json() as {
@@ -235,7 +250,15 @@ async function findMatchingProfiles(
       search_id: string
     }
 
+    console.log('   Raw Clado response:', JSON.stringify(data, null, 2).substring(0, 500))
     console.log(`   Clado found ${data.total} total results`)
+    console.log(`   Results array length: ${data.results?.length || 0}`)
+    
+    if (!data.results || data.results.length === 0) {
+      console.warn('   ⚠️  Clado returned 0 results. The search may be too specific or the query needs adjustment.')
+      return []
+    }
+
     console.log(`   Returning ${Math.min(data.results.length, 5)} profiles`)
 
     // Map Clado results to MatchedProfile format
