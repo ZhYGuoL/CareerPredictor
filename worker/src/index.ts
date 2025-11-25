@@ -19,6 +19,28 @@ interface MatchedProfile {
   snippet: string
 }
 
+type WorkersAIResponse = {
+  response?: string
+  [key: string]: unknown
+}
+
+type WorkerRequest =
+  | {
+      mode?: 'analyze'
+      linkedinUrl: string
+    }
+  | {
+      mode: 'match'
+      careerGoal: string
+      selectedPoints: PointOfInterest[]
+    }
+
+const MAX_POINTS_OF_INTEREST = 10
+const MAX_SELECTED_POINTS = 3
+const EXA_REQUEST_TIMEOUT_MS = 20000
+const AI_REQUEST_TIMEOUT_MS = 45000
+const CLADO_REQUEST_TIMEOUT_MS = 20000
+
 // CORS headers for frontend communication
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -38,38 +60,78 @@ export default {
     }
 
     try {
-      const { linkedinUrl, careerGoal } = await request.json() as { linkedinUrl: string; careerGoal: string }
+      const payload = await request.json() as WorkerRequest
+      const mode = payload.mode ?? 'analyze'
 
-      if (!linkedinUrl || !careerGoal) {
+      if (mode === 'match') {
+        const { careerGoal, selectedPoints } = payload as Extract<WorkerRequest, { mode: 'match' }>
+
+        if (!careerGoal || !careerGoal.trim()) {
+          return new Response(
+            JSON.stringify({ error: 'Missing career goal for match request' }),
+            { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          )
+        }
+
+        if (!Array.isArray(selectedPoints) || selectedPoints.length === 0) {
+          return new Response(
+            JSON.stringify({ error: 'Please provide up to 3 selected experiences' }),
+            { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          )
+        }
+
+        if (selectedPoints.length !== MAX_SELECTED_POINTS) {
+          return new Response(
+            JSON.stringify({ error: `Exactly ${MAX_SELECTED_POINTS} experiences are required to find matches` }),
+            { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          )
+        }
+
+        console.log('=== Starting Clado match request ===')
+        console.log('Career Goal:', careerGoal)
+        console.log('Selected Points:', JSON.stringify(selectedPoints, null, 2))
+
+        const criteria: CareerCriteria = {
+          pointsOfInterest: selectedPoints.slice(0, MAX_SELECTED_POINTS),
+        }
+
+        console.log('\n[STEP 1/1] Finding matching profiles with Clado...')
+        const matchedProfiles = await findMatchingProfiles(criteria, careerGoal, env.CLADO_API_KEY)
+        console.log('✅ Found', matchedProfiles.length, 'matching profiles')
+
+        console.log('\n=== Match request completed ===\n')
         return new Response(
-          JSON.stringify({ error: 'Missing linkedinUrl or careerGoal' }),
+          JSON.stringify({ matchedProfiles }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        )
+      }
+
+      if (!('linkedinUrl' in payload) || !payload.linkedinUrl) {
+        return new Response(
+          JSON.stringify({ error: 'Missing linkedinUrl for profile analysis' }),
           { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         )
       }
 
-      console.log('=== Starting Career Predictor Request ===')
+      const { linkedinUrl } = payload
+
+      console.log('=== Starting LinkedIn Profile Analysis ===')
       console.log('LinkedIn URL:', linkedinUrl)
-      console.log('Career Goal:', careerGoal)
 
       // Step 1: Crawl LinkedIn profile using Exa
-      console.log('\n[STEP 1/3] Crawling LinkedIn profile with Exa...')
+      console.log('\n[STEP 1/2] Crawling LinkedIn profile with Exa...')
       const markdown = await crawlLinkedInProfile(linkedinUrl, env.EXA_API_KEY)
       console.log('✅ Profile crawled successfully. Length:', markdown.length, 'characters')
       console.log('Preview:', markdown.substring(0, 300) + '...')
 
       // Step 2: Extract career criteria using Cloudflare Workers AI
-      console.log('\n[STEP 2/3] Extracting career criteria with Workers AI...')
+      console.log('\n[STEP 2/2] Extracting up to 10 career highlights with Workers AI...')
       const criteria = await extractCriteria(markdown, env.AI)
       console.log('✅ Criteria extracted successfully:', JSON.stringify(criteria, null, 2))
 
-      // Step 3: Find matching profiles using Clado
-      console.log('\n[STEP 3/3] Finding matching profiles with Clado...')
-      const matchedProfiles = await findMatchingProfiles(criteria, careerGoal, env.CLADO_API_KEY)
-      console.log('✅ Found', matchedProfiles.length, 'matching profiles')
-
-      console.log('\n=== Request completed successfully ===\n')
+      console.log('\n=== Profile analysis completed ===\n')
       return new Response(
-        JSON.stringify({ criteria, matchedProfiles }),
+        JSON.stringify({ criteria }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     } catch (error) {
@@ -84,7 +146,7 @@ export default {
 }
 
 async function crawlLinkedInProfile(url: string, apiKey: string): Promise<string> {
-  const response = await fetch('https://api.exa.ai/contents', {
+  const response = await fetchWithTimeout('https://api.exa.ai/contents', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -97,7 +159,7 @@ async function crawlLinkedInProfile(url: string, apiKey: string): Promise<string
         maxCharacters: 10000,
       },
     }),
-  })
+  }, EXA_REQUEST_TIMEOUT_MS, 'Exa API request timed out')
 
   if (!response.ok) {
     const errorText = await response.text()
@@ -114,12 +176,13 @@ async function crawlLinkedInProfile(url: string, apiKey: string): Promise<string
 }
 
 async function extractCriteria(markdown: string, ai: any): Promise<CareerCriteria> {
-  const prompt = `Analyze this LinkedIn profile and identify 3-5 key "points of interest" that define this person's unique background and qualifications.
+const prompt = `Analyze this LinkedIn profile and identify up to 10 of the most important "points of interest" that define this person's unique background and qualifications.
 
 Each point of interest should be:
 - Specific and measurable (e.g., "Studied Computer Science at Stanford" not just "went to college")
 - Career-relevant (education, work experience, skills, achievements)
 - Generalizable (can be matched with similar people)
+- Ordered from most to least impactful when possible.
 
 LinkedIn Profile:
 ${markdown.substring(0, 4000)}
@@ -133,12 +196,16 @@ Return ONLY a JSON array of points of interest in this exact format:
 
 Types: education, experience, skill, achievement, background`
 
-  const response = await ai.run('@cf/meta/llama-3-8b-instruct', {
+  const response = await withTimeout<WorkersAIResponse>(
+    ai.run('@cf/meta/llama-3-8b-instruct', {
     messages: [
       { role: 'system', content: 'You analyze LinkedIn profiles and extract key points of interest. Return only valid JSON arrays, no explanations.' },
       { role: 'user', content: prompt }
     ],
-  })
+    }),
+    AI_REQUEST_TIMEOUT_MS,
+    'Workers AI request timed out'
+  )
 
   try {
     // Parse the AI response to extract JSON
@@ -168,7 +235,7 @@ Types: education, experience, skill, achievement, background`
 
     console.log('Valid points of interest:', JSON.stringify(validPoints))
 
-    return { pointsOfInterest: validPoints.slice(0, 5) } // Max 5 criteria per Exa API limit
+    return { pointsOfInterest: validPoints.slice(0, MAX_POINTS_OF_INTEREST) }
   } catch (error) {
     console.error('Error parsing AI response:', error)
     console.error('Full AI response:', JSON.stringify(response))
@@ -207,13 +274,13 @@ async function findMatchingProfiles(
     
     console.log('   API key format:', apiKey.substring(0, 5) + '...')
     
-    const response = await fetch(url.toString(), {
+    const response = await fetchWithTimeout(url.toString(), {
       method: 'GET',
       headers: {
         'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
-    })
+    }, CLADO_REQUEST_TIMEOUT_MS, 'Clado API request timed out')
 
     console.log('   Clado response status:', response.status)
     console.log('   Clado response headers:', Object.fromEntries(response.headers.entries()))
@@ -287,5 +354,42 @@ async function findMatchingProfiles(
   } catch (error) {
     console.error('   Clado API call failed:', error)
     throw error
+  }
+}
+
+async function fetchWithTimeout(
+  resource: RequestInfo | URL,
+  init: RequestInit,
+  timeoutMs: number,
+  timeoutMessage: string
+): Promise<Response> {
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
+
+  try {
+    return await fetch(resource, { ...init, signal: controller.signal })
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error(timeoutMessage)
+    }
+    throw error
+  } finally {
+    clearTimeout(timeoutId)
+  }
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, timeoutMessage: string): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined
+
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(timeoutMessage)), timeoutMs)
+  })
+
+  try {
+    return await Promise.race([promise, timeoutPromise])
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId)
+    }
   }
 }
