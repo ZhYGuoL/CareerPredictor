@@ -17,7 +17,7 @@ interface MatchedProfile {
 }
 
 const MAX_SELECTION = 3
-const ANALYZE_TIMEOUT_MS = 60000
+const ANALYZE_TIMEOUT_MS = 90000 // 90 seconds for analysis (Exa + AI)
 const MATCH_TIMEOUT_MS = 45000
 
 async function fetchWithTimeout(
@@ -82,6 +82,10 @@ function App() {
 
     setAnalyzing(true)
     setSelectionMessage('')
+    setCriteria(null)
+    setMatchedProfiles([])
+    setSelectedPoints([])
+    setDreamGoal('')
 
     try {
       // Call Cloudflare Worker API endpoint
@@ -89,32 +93,35 @@ function App() {
       const response = await fetchWithTimeout(
         apiUrl,
         {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          mode: 'analyze',
-          linkedinUrl,
-        }),
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            mode: 'analyze',
+            linkedinUrl,
+          }),
         },
         ANALYZE_TIMEOUT_MS,
-        'Profile analysis timed out. Please try again.'
+        'Profile analysis timed out after 90 seconds. The LinkedIn profile may be taking longer to process. Please try again.'
       )
 
       if (!response.ok) {
-        const errorData = await response.json()
-        throw new Error(errorData.error || 'Failed to analyze profile')
+        const errorData = await response.json().catch(() => ({ error: `Server error: ${response.status}` }))
+        throw new Error(errorData.error || `Failed to analyze profile (${response.status})`)
       }
 
       const data = await response.json() as { criteria: CareerCriteria }
+      
+      if (!data.criteria || !data.criteria.pointsOfInterest || data.criteria.pointsOfInterest.length === 0) {
+        throw new Error('No career highlights were extracted from the profile. Please try a different LinkedIn URL.')
+      }
+
       setCriteria(data.criteria)
-      setMatchedProfiles([])
-      setSelectedPoints([])
-      setDreamGoal('')
       setSelectionMessage('Pick the 3 experiences that feel most representative.')
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'An error occurred')
+      console.error('Analysis error:', err)
+      setError(err instanceof Error ? err.message : 'An error occurred while analyzing the profile')
     } finally {
       setAnalyzing(false)
     }
@@ -173,28 +180,33 @@ function App() {
       const response = await fetchWithTimeout(
         apiUrl,
         {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          mode: 'match',
-          careerGoal: dreamGoal,
-          selectedPoints,
-        }),
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            mode: 'match',
+            careerGoal: dreamGoal,
+            selectedPoints,
+          }),
         },
         MATCH_TIMEOUT_MS,
         'Finding matching professionals timed out. Please try again.'
       )
 
       if (!response.ok) {
-        const errorData = await response.json()
-        throw new Error(errorData.error || 'Failed to find matches')
+        const errorData = await response.json().catch(() => ({ error: `Server error: ${response.status}` }))
+        throw new Error(errorData.error || `Failed to find matches (${response.status})`)
       }
 
       const data = await response.json() as { matchedProfiles: MatchedProfile[] }
-      setMatchedProfiles(data.matchedProfiles)
+      setMatchedProfiles(data.matchedProfiles || [])
+      
+      if (!data.matchedProfiles || data.matchedProfiles.length === 0) {
+        setError('No matching professionals found. Try adjusting your selections or career goal.')
+      }
     } catch (err) {
+      console.error('Match error:', err)
       setError(err instanceof Error ? err.message : 'An error occurred while finding matches')
     } finally {
       setMatching(false)
@@ -279,7 +291,7 @@ function App() {
                 >
                   <span className="criteria-type">{point.type}</span>
                   <span className="criteria-description">{point.description}</span>
-                  {selected && <span className="criteria-check">Selected</span>}
+                  {selected && <span className="criteria-check">✓ Selected</span>}
                 </button>
               )
             })}
@@ -293,7 +305,7 @@ function App() {
         </div>
       )}
 
-      {criteria && (
+      {criteria && !analyzing && (
         <form onSubmit={handleFindMatches} className="match-form">
           <div className="form-group">
             <label htmlFor="dream-goal">Your Dream Goal</label>
